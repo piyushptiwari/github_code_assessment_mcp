@@ -1,0 +1,8 @@
+# Deep SAST MCP Server — Python deps
+# The scanners themselves (semgrep, gitleaks, osv-scanner) are installed as binaries
+# in the Dockerfile, not via pip (except semgrep which ships a CLI on pip too).
+
+fastmcp>=2.0.0
+semgrep>=1.80.0
+checkov>=3.2.0
+uvicorn>=0.30.0
