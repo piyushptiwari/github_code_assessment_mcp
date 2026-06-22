@@ -2,17 +2,21 @@
 
 A Model Context Protocol server that gives the agent
 `github_code_security_assessment_Piyush_tiwari` deterministic, 100%-file-coverage
-security findings by wrapping **Semgrep** (SAST), **gitleaks** (secrets) and
-**osv-scanner** (dependency CVEs).
+security findings by wrapping **Semgrep** (SAST), **gitleaks** (secrets),
+**osv-scanner** (dependency CVEs), **Checkov** (IaC/OpenAPI) and **Trivy**
+(filesystem/container vulnerabilities and misconfigurations).
 
 Why: the agent's GitHub tools sample code; this server PARSES every file. The LLM then
 triages real findings instead of grepping — that's the thoroughness unlock.
 
 ## Files
-- `server.py` — the MCP server (FastMCP). 7 tools: scan_repository, get_scan_status,
-  list_findings, get_finding_context, get_file, get_dependency_report, cleanup_scan.
-- `requirements.txt` — Python deps (fastmcp, semgrep).
-- `Dockerfile` — image with all three scanners on PATH.
+- `server.py` - thin entrypoint.
+- `deep_sast_mcp/app.py` - FastMCP tool registration and HTTP/report routes.
+- `deep_sast_mcp/scan_engine.py` - clone, scanner selection, and orchestration.
+- `deep_sast_mcp/scanners/` - one adapter per scanner.
+- `deep_sast_mcp/reporting.py` - Markdown, HTML, JSON, SARIF, and ZIP evidence packs.
+- `requirements.txt` - Python deps.
+- `Dockerfile` - image with scanner CLIs on PATH.
 
 ## Tools exposed to the agent
 | Tool | Purpose |
@@ -23,10 +27,21 @@ triages real findings instead of grepping — that's the thoroughness unlock.
 | `get_finding_context(scan_id, finding_id, context_lines)` | code around a sink, for triage |
 | `get_file(scan_id, path, start_line, end_line)` | raw file for deep dives |
 | `get_dependency_report(scan_id)` | SCA / CVE results |
-| `cleanup_scan(scan_id)` | delete the scan workspace |
+| `generate_report(scan_id, format)` | creates a detailed downloadable report artifact |
+| `get_report(report_id, max_chars)` | returns text report content through MCP |
+| `list_reports(scan_id)` | lists generated artifacts and download URLs |
+| `cleanup_scan(scan_id, keep_reports)` | delete the clone workspace; preserves reports by default |
 
 Normalized finding fields: `id, scanner, rule_id, title, severity, owasp, cwe, path,
-start_line, end_line, snippet, fix_hint`. (gitleaks snippet is redacted.)
+start_line, end_line, snippet, fix_hint, confidence, details`. (gitleaks snippet is redacted.)
+
+Report formats:
+- `markdown` - human report with executive summary, coverage ledger, scanner inventory,
+  severity/scanner distributions, detailed findings, dependency appendix and remediation plan.
+- `html` - browser-readable copy of the Markdown report.
+- `json` - raw normalized evidence for downstream automation.
+- `sarif` - importable into code scanning tools.
+- `zip` - evidence pack containing Markdown, HTML, JSON, SARIF and dependency CSV.
 
 ## 1. Run locally (smoke test)
 ```bash
@@ -77,13 +92,13 @@ section) → **"Add New MCP Server or Gateway"** and fill:
 |---|---|
 | MCP Server Name | `Deep SAST` (or similar) |
 | MCP Server URL | your hosted endpoint, e.g. `https://deep-sast-mcp.<region>.codeengine.appdomain.cloud/mcp` |
-| Description | "Semgrep + gitleaks + osv-scanner SAST over MCP" |
+| Description | "Semgrep + gitleaks + osv-scanner + Checkov + Trivy security scanning over MCP" |
 | Tags | `security,sast,code-review` |
 | Visibility | **Team** (Public is disabled by platform config) |
 | Transport Type | **Streamable HTTP** (our FastMCP server uses HTTP; not SSE) |
 | Authentication Type | None / Basic / Bearer — match what you configured on the server |
 
-After adding, ContextForge federates the server, its 7 tools appear under **Tools**, and you
+After adding, ContextForge federates the server, its tools appear under **Tools**, and you
 can group them into a **Virtual Server** (with its own API key) that the app's agents consume.
 
 Note: existing team servers show URLs like
@@ -106,12 +121,15 @@ Your backend (this server) must be reachable over public HTTPS for the gateway t
 3. For each finding → `get_finding_context` → confirm source→sink, drop false positives,
    finalize severity + remediation.
 4. `get_dependency_report` → supply-chain findings; confirm notable CVEs via Web Search.
-5. Emit the report + a COVERAGE LEDGER backed by REAL scanner numbers (not an estimate).
-6. `cleanup_scan(scan_id)` when done.
+5. `generate_report(scan_id, "markdown")` for the human report; also generate `json`,
+   `sarif`, or `zip` when machine-readable evidence is needed.
+6. Share the returned `download_url` with the user.
+7. `cleanup_scan(scan_id)` when done. Reports are preserved by default so the URL remains usable.
 
 ## Security notes (do not weaken)
 - Scanners parse, never execute, the target code.
 - Per-scan temp workspace, deleted by `cleanup_scan`.
+- Report artifacts are stored separately from the clone workspace and can be preserved after cleanup.
 - Clone is shallow, host-allowlisted, and size-capped (`MAX_REPO_MB`).
 - gitleaks secret VALUES are redacted before leaving the process.
 - `get_file` blocks path traversal outside the scan workspace.

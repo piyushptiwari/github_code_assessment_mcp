@@ -41,6 +41,7 @@ COPY requirements.txt .
 # installs fastmcp + semgrep (SAST) + checkov (IaC) + uvicorn
 RUN pip install --no-cache-dir -r requirements.txt
 COPY server.py .
+COPY deep_sast_mcp ./deep_sast_mcp
 
 # Run as non-root; scanners only parse code, they never execute the target repo.
 RUN useradd -m scanner && mkdir -p /tmp/trivy && chown -R scanner /tmp/trivy
@@ -48,5 +49,5 @@ USER scanner
 
 EXPOSE 8080
 # Optional hardening / config knobs (override at deploy):
-#   MAX_REPO_MB, SCAN_TIMEOUT_S, MCP_AUTH_TOKEN
+#   MAX_REPO_MB, SCAN_TIMEOUT_S, MCP_AUTH_TOKEN, PUBLIC_BASE_URL, PUBLIC_REPORTS
 CMD ["python", "server.py", "--transport", "http", "--host", "0.0.0.0", "--port", "8080"]
