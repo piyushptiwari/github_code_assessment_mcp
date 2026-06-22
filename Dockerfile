@@ -5,12 +5,12 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
     GITLEAKS_VERSION=8.18.4 \
     OSV_VERSION=1.8.5 \
-    TRIVY_VERSION=0.53.0 \
+    TRIVY_VERSION=0.55.0 \
     TRIVY_CACHE_DIR=/tmp/trivy \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git curl ca-certificates tar \
+ && apt-get install -y --no-install-recommends git curl ca-certificates tar gnupg \
  && rm -rf /var/lib/apt/lists/*
 
 # gitleaks (secret scanning)
@@ -26,10 +26,14 @@ RUN curl -sSfL "https://github.com/google/osv-scanner/releases/download/v${OSV_V
  && chmod +x /usr/local/bin/osv-scanner \
  && osv-scanner --version
 
-# trivy (container / filesystem vuln + misconfig scanning)
-# Use the official install script so the correct release asset is always resolved.
-RUN curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-      | sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}" \
+# trivy (container / filesystem vuln + misconfig scanning) via official APT repo
+RUN curl -sSfL https://aquasecurity.github.io/trivy-repo/deb/public.key \
+      | gpg --dearmor -o /usr/share/keyrings/trivy.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
+      > /etc/apt/sources.list.d/trivy.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends trivy \
+ && rm -rf /var/lib/apt/lists/* \
  && trivy --version
 
 WORKDIR /app
