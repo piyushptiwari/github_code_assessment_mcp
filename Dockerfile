@@ -27,10 +27,9 @@ RUN curl -sSfL "https://github.com/google/osv-scanner/releases/download/v${OSV_V
  && osv-scanner --version
 
 # trivy (container / filesystem vuln + misconfig scanning)
-RUN curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-      -o /tmp/trivy.tgz \
- && tar -xzf /tmp/trivy.tgz -C /usr/local/bin trivy \
- && rm /tmp/trivy.tgz \
+# Use the official install script so the correct release asset is always resolved.
+RUN curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+      | sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}" \
  && trivy --version
 
 WORKDIR /app
