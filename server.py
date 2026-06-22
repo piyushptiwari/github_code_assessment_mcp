@@ -356,24 +356,60 @@ def _do_scan(scan: Scan, scanners: list[str]) -> None:
 
 
 # ----------------------------------------------------------------------------- MCP tools
+# Friendly aliases so callers can say "sast"/"secrets"/"sca"/"iac"/"container"
+# (or the raw scanner names) interchangeably.
+SCANNER_ALIASES = {
+    "sast": "semgrep", "semgrep": "semgrep",
+    "secrets": "gitleaks", "secret": "gitleaks", "gitleaks": "gitleaks",
+    "sca": "osv", "deps": "osv", "dependencies": "osv", "osv": "osv", "osv-scanner": "osv",
+    "iac": "checkov", "checkov": "checkov",
+    "container": "trivy", "containers": "trivy", "image": "trivy", "trivy": "trivy",
+}
+
+
+def _coerce_scanners(scanners: Any) -> list[str]:
+    """Accept None, a list, a comma/space-separated string, or a JSON-ish string and
+    return the canonical scanner list. Unknown tokens are ignored. Empty -> all."""
+    if scanners is None or scanners == "":
+        return list(DEFAULT_SCANNERS)
+    if isinstance(scanners, str):
+        tokens = re.split(r"[\s,]+", scanners.strip().strip("[]").replace('"', "").replace("'", ""))
+    elif isinstance(scanners, (list, tuple, set)):
+        tokens = [str(t) for t in scanners]
+    else:
+        tokens = [str(scanners)]
+    canon = [SCANNER_ALIASES.get(t.strip().lower()) for t in tokens if t.strip()]
+    canon = [c for c in canon if c]
+    # preserve order, dedupe; fall back to all if nothing recognized
+    seen: dict[str, None] = {}
+    for c in canon:
+        seen.setdefault(c, None)
+    return list(seen) or list(DEFAULT_SCANNERS)
+
+
 @mcp.tool()
 def scan_repository(repo_url: str, ref: str = "HEAD",
-                    scanners: list[str] | None = None) -> dict:
+                    scanners: str | None = None) -> dict:
     """Clone a public repo and run the full scanner set over EVERY file:
     SAST (semgrep), secrets (gitleaks), SCA (osv-scanner), IaC misconfig (checkov)
     and container/filesystem (trivy). Returns a scan_id and finding counts.
-    Synchronous: completes before returning (may take minutes on large repos)."""
-    scanners = scanners or DEFAULT_SCANNERS
+    Synchronous: completes before returning (may take minutes on large repos).
+
+    `scanners` is OPTIONAL. Omit it to run all five. To restrict, pass a comma-separated
+    string of any of: sast, secrets, sca, iac, container (e.g. "sast,secrets,sca").
+    A JSON list of the same tokens is also accepted."""
+    selected = _coerce_scanners(scanners)
     _validate_repo_url(repo_url)
     sid = uuid.uuid4().hex
     workdir = tempfile.mkdtemp(prefix=f"sast-{sid}-")
     scan = Scan(scan_id=sid, repo_url=repo_url, ref=ref, workdir=workdir)
     SCANS[sid] = scan
-    _do_scan(scan, scanners)
+    _do_scan(scan, selected)
     return {
         "scan_id": sid,
         "state": scan.state,
         "error": scan.error,
+        "scanners": selected,
         "total_files": scan.total_files,
         "files_scanned": scan.files_scanned,
         "findings_count": len(scan.findings),
