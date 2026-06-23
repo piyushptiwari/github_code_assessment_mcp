@@ -107,6 +107,10 @@ class Scan:
     scanner_versions: dict[str, str] = field(default_factory=dict)
     reports: list[ReportArtifact] = field(default_factory=list)
     error: str | None = None
+    current_stage: str = "pending"
+    scanners_total: int = 0
+    scanners_completed: int = 0
+    started_monotonic: float = 0.0
     started_at: str = field(default_factory=utc_now)
     completed_at: str = ""
     duration_seconds: float = 0.0

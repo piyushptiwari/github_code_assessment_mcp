@@ -24,6 +24,12 @@ MAX_FILE_KB = int(os.getenv("MAX_FILE_KB", "1024"))
 RESPECT_GITIGNORE = os.getenv("RESPECT_GITIGNORE", "true").strip().lower() not in {"0", "false", "no"}
 # Cap findings retained per scanner so a pathological repo cannot exhaust memory.
 MAX_FINDINGS_PER_SCANNER = int(os.getenv("MAX_FINDINGS_PER_SCANNER", "5000"))
+# Bound retained scans so the in-memory registry cannot grow without limit.
+MAX_RETAINED_SCANS = int(os.getenv("MAX_RETAINED_SCANS", "25"))
+# Evict a finished scan's clone workspace after this many seconds (reports kept).
+SCAN_TTL_S = int(os.getenv("SCAN_TTL_S", "3600"))
+# Hard cap on lines returned by get_file in a single call to bound response size.
+MAX_GET_FILE_LINES = int(os.getenv("MAX_GET_FILE_LINES", "2000"))
 
 # Default-exclude directories, seeded from Semgrep's default.semgrepignore plus
 # common build/cache/vendor output. These are skipped even when committed.

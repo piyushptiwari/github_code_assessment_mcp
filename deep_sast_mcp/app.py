@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from .auth import apply_bearer_auth
+from .config import MAX_GET_FILE_LINES
 from .models import Scan
 from .reporting import generate_report_artifact, scan_snapshot
 from .scan_engine import start_scan
@@ -20,6 +22,8 @@ from .utils import sort_findings
 
 
 mcp = FastMCP("deep-sast")
+
+_RUNNING_STATES = {"queued", "cloning", "scanning"}
 
 
 def _safe_repo_path(workdir: str, path: str) -> str | None:
@@ -32,10 +36,70 @@ def _safe_repo_path(workdir: str, path: str) -> str | None:
     return str(candidate)
 
 
+def _read_line_window(path: str, from_line: int, max_lines: int) -> tuple[list[str], int, bool]:
+    """Read at most ``max_lines`` starting at 1-indexed ``from_line`` without loading
+    the whole file into memory. Returns (lines, last_line_number, truncated)."""
+    collected: list[str] = []
+    last_line = from_line - 1
+    truncated = False
+    with open(path, errors="replace", encoding="utf-8") as handle:
+        for _ in range(max(0, from_line - 1)):
+            if handle.readline() == "":
+                return collected, last_line, False
+        for offset in range(max_lines):
+            line = handle.readline()
+            if line == "":
+                break
+            collected.append(line)
+            last_line = from_line + offset
+        else:
+            truncated = handle.readline() != ""
+    return collected, last_line, truncated
+
+
+def elapsed_seconds(scan: Scan) -> float:
+    if scan.state in {"done", "error"}:
+        return scan.duration_seconds
+    if scan.started_monotonic:
+        return round(time.monotonic() - scan.started_monotonic, 1)
+    return 0.0
+
+
+def scan_progress(scan: Scan) -> dict[str, Any]:
+    total = scan.scanners_total or len(scan.selected_scanners)
+    done = scan.scanners_completed
+    if scan.state == "done":
+        percent = 100.0
+    elif total:
+        percent = round((done / total) * 100, 1)
+    else:
+        percent = 0.0
+    return {
+        "stage": scan.current_stage,
+        "scanners_total": total,
+        "scanners_completed": done,
+        "percent": percent,
+    }
+
+
+def _next_step(scan: Scan) -> str:
+    if scan.state in _RUNNING_STATES:
+        return (
+            "Scan is running asynchronously. Poll get_scan_status(scan_id) and show "
+            "progress.stage to the user until state=='done', then call generate_report."
+        )
+    if scan.state == "error":
+        return "Scan failed. Report the error to the user; do not call generate_report."
+    return "Call generate_report(scan_id, format='markdown'|'html'|'json'|'sarif'|'zip') and return the download_url to the user."
+
+
 def scan_summary(scan: Scan) -> dict[str, Any]:
     return {
         "scan_id": scan.scan_id,
         "state": scan.state,
+        "current_stage": scan.current_stage,
+        "progress": scan_progress(scan),
+        "elapsed_seconds": elapsed_seconds(scan),
         "error": scan.error,
         "repo_url": scan.repo_url,
         "ref": scan.ref,
@@ -57,17 +121,21 @@ def scan_summary(scan: Scan) -> dict[str, Any]:
         "dependency_findings": len(scan.dependencies),
         "scanner_runs": [asdict(run) for run in scan.scanner_runs],
         "reports": [asdict(report) for report in scan.reports],
-        "next_step": "Call generate_report(scan_id, format='markdown'|'html'|'json'|'sarif'|'zip') and return the download_url to the user.",
+        "next_step": _next_step(scan),
     }
 
 
 @mcp.tool()
 def scan_repository(repo_url: str, ref: str = "HEAD", scanners: str | None = None) -> dict:
-    """Clone a public repo and run SAST, secrets, SCA, IaC, and container/filesystem scanners.
+    """Start an asynchronous repository scan and return immediately with a scan_id.
 
-    Omit `scanners` to run everything. To restrict, pass a comma-separated string using
-    aliases such as `sast,secrets,sca,iac,container`. The scan is synchronous and returns
-    a scan_id plus coverage and finding counts.
+    Runs SAST, secrets, SCA, IaC, and container/filesystem scanners in parallel in a
+    background worker so the call never blocks the agent turn (large repos previously
+    timed out at 300s). Omit `scanners` to run everything, or pass a comma-separated
+    string of aliases such as `sast,secrets,sca,iac,container`.
+
+    The returned state is usually `queued`. Poll get_scan_status(scan_id), surface
+    progress.stage to the user until state is `done`, then call generate_report.
     """
     scan = start_scan(repo_url=repo_url, ref=ref, scanners=scanners)
     return scan_summary(scan)
@@ -117,39 +185,52 @@ def get_finding_context(scan_id: str, finding_id: str, context_lines: int = 30) 
         return {"error": "unknown finding_id"}
     if finding.scanner == "gitleaks":
         return {"finding": asdict(finding), "context": "***REDACTED***"}
+    if not scan.workdir:
+        return {"finding": asdict(finding), "context": None, "message": "scan workspace evicted; reports remain available"}
     absolute_path = _safe_repo_path(scan.workdir, finding.path)
     if not absolute_path or not os.path.isfile(absolute_path):
         return {"finding": asdict(finding), "context": None}
-    with open(absolute_path, errors="replace", encoding="utf-8") as handle:
-        lines = handle.readlines()
     context_lines = max(1, min(context_lines, 200))
-    low = max(0, finding.start_line - 1 - context_lines)
-    high = min(len(lines), (finding.end_line or finding.start_line) + context_lines)
+    from_line = max(1, finding.start_line - context_lines)
+    span = (finding.end_line or finding.start_line) - finding.start_line + 1
+    max_lines = min(MAX_GET_FILE_LINES, span + 2 * context_lines)
+    lines, last_line, _ = _read_line_window(absolute_path, from_line, max_lines)
     return {
         "finding": asdict(finding),
-        "from_line": low + 1,
-        "to_line": high,
-        "context": "".join(lines[low:high]),
+        "from_line": from_line,
+        "to_line": last_line,
+        "context": "".join(lines),
     }
 
 
 @mcp.tool()
 def get_file(scan_id: str, path: str, start_line: int = 1, end_line: int = 0) -> dict:
-    """Return raw repo-relative file content for deep dives. end_line=0 means EOF."""
+    """Return raw repo-relative file content for deep dives. end_line=0 reads to EOF,
+    capped at MAX_GET_FILE_LINES lines per call to bound the response size."""
     scan = SCANS.get(scan_id)
     if not scan:
         return {"error": "unknown scan_id"}
+    if not scan.workdir:
+        return {"error": "scan workspace evicted; reports remain available via list_reports"}
     absolute_path = _safe_repo_path(scan.workdir, path)
     if not absolute_path:
         return {"error": "path outside scan workspace"}
     if not os.path.isfile(absolute_path):
         return {"error": "file not found"}
-    with open(absolute_path, errors="replace", encoding="utf-8") as handle:
-        lines = handle.readlines()
     start_line = max(1, start_line)
-    end = end_line or len(lines)
-    end = max(start_line, min(end, len(lines)))
-    return {"path": path, "from_line": start_line, "to_line": end, "content": "".join(lines[start_line - 1:end])}
+    if end_line and end_line >= start_line:
+        requested = end_line - start_line + 1
+    else:
+        requested = MAX_GET_FILE_LINES
+    max_lines = min(MAX_GET_FILE_LINES, requested)
+    lines, last_line, truncated = _read_line_window(absolute_path, start_line, max_lines)
+    return {
+        "path": path,
+        "from_line": start_line,
+        "to_line": last_line,
+        "truncated": truncated,
+        "content": "".join(lines),
+    }
 
 
 @mcp.tool()
@@ -171,6 +252,15 @@ def generate_report(scan_id: str, format: str = "markdown", max_preview_chars: i
     scan = SCANS.get(scan_id)
     if not scan:
         return {"error": "unknown scan_id"}
+    if scan.state in _RUNNING_STATES:
+        return {
+            "scan_id": scan_id,
+            "state": scan.state,
+            "current_stage": scan.current_stage,
+            "progress": scan_progress(scan),
+            "elapsed_seconds": elapsed_seconds(scan),
+            "message": "Scan still running. Poll get_scan_status until state=='done', then call generate_report.",
+        }
     artifact, content = generate_report_artifact(scan, format)
     max_preview_chars = max(1, min(max_preview_chars, 50000))
     return {
