@@ -102,7 +102,20 @@ def scan_snapshot(scan: Scan) -> dict[str, Any]:
         "started_at": scan.started_at,
         "completed_at": scan.completed_at,
         "duration_seconds": scan.duration_seconds,
-        "coverage": {"total_files": scan.total_files, "files_scanned": scan.files_scanned, "coverage_percent": coverage_percent(scan)},
+        "coverage": {
+            "total_discovered": scan.coverage.total_discovered,
+            "in_scope": scan.coverage.in_scope,
+            "scanned": scan.coverage.scanned,
+            "coverage_percent": scan.coverage.coverage_percent,
+            "skipped": scan.coverage.skipped,
+            "languages": scan.coverage.languages,
+            "lockfiles": scan.coverage.lockfiles,
+            "reconciles": scan.coverage.reconciles,
+            "selection_via_git": scan.coverage.used_git,
+            # Back-compat aliases.
+            "total_files": scan.coverage.in_scope,
+            "files_scanned": scan.coverage.scanned,
+        },
         "selected_scanners": scan.selected_scanners,
         "scanner_versions": scan.scanner_versions,
         "scanner_runs": [asdict(run) for run in scan.scanner_runs],
@@ -120,9 +133,7 @@ def scan_snapshot(scan: Scan) -> dict[str, Any]:
 
 
 def coverage_percent(scan: Scan) -> float:
-    if scan.total_files == 0:
-        return 0.0
-    return round((scan.files_scanned / scan.total_files) * 100, 2)
+    return scan.coverage.coverage_percent
 
 
 def severity_counts(findings: list) -> dict[str, int]:
@@ -165,7 +176,9 @@ def render_markdown(scan: Scan) -> str:
     lines.append(f"- State: `{scan.state}`")
     if scan.error:
         lines.append(f"- Error: `{scan.error}`")
-    lines.append(f"- Coverage: {scan.files_scanned}/{scan.total_files} files scanned ({coverage_percent(scan)}%)")
+    ledger = scan.coverage
+    lines.append(f"- Coverage: {ledger.scanned}/{ledger.in_scope} in-scope files scanned ({ledger.coverage_percent}%)")
+    lines.append(f"- Files discovered in working tree: {ledger.total_discovered} (selection via {'git' if ledger.used_git else 'filesystem walk'})")
     lines.append(f"- Code/IaC/secrets/container findings: {len(findings)}")
     lines.append(f"- Dependency findings: {len(scan.dependencies)}")
     lines.append(f"- Started: {scan.started_at}")
@@ -176,11 +189,30 @@ def render_markdown(scan: Scan) -> str:
     lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|---|---:|")
-    lines.append(f"| Total in-scope files | {scan.total_files} |")
-    lines.append(f"| Files scanned by deterministic tools | {scan.files_scanned} |")
-    lines.append(f"| Coverage percent | {coverage_percent(scan)} |")
-    lines.append("| Skipped files | 0 |")
+    lines.append(f"| Files discovered (working tree) | {ledger.total_discovered} |")
+    lines.append(f"| In-scope source files | {ledger.in_scope} |")
+    lines.append(f"| Files scanned by deterministic tools | {ledger.scanned} |")
+    lines.append(f"| In-scope coverage percent | {ledger.coverage_percent} |")
+    lines.append(f"| Dependency lockfiles parsed for SCA | {ledger.lockfiles} |")
+    lines.append(f"| Skipped (total, accounted) | {sum(ledger.skipped.values())} |")
+    lines.append(f"| Ledger reconciles | {'yes' if ledger.reconciles else 'no'} |")
     lines.append("")
+    if ledger.skipped:
+        lines.append("### Skipped Files By Reason")
+        lines.append("")
+        lines.append("| Reason | Count |")
+        lines.append("|---|---:|")
+        for reason, count in sorted(ledger.skipped.items(), key=lambda item: (-item[1], item[0])):
+            lines.append(f"| {reason} | {count} |")
+        lines.append("")
+    if ledger.languages:
+        lines.append("### In-Scope Languages")
+        lines.append("")
+        lines.append("| Language | Files |")
+        lines.append("|---|---:|")
+        for language, count in sorted(ledger.languages.items(), key=lambda item: (-item[1], item[0])):
+            lines.append(f"| {language} | {count} |")
+        lines.append("")
     lines.append("## Scanner Inventory")
     lines.append("")
     lines.append("| Scanner | Version | Status | Findings | Dependencies | Return code | Duration seconds |")

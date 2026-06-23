@@ -7,8 +7,11 @@ from ..models import Finding, ScannerOutput
 from ..utils import SEVERITY_MAP, load_json_output, run_command
 
 
-def scan(workdir: str, seed: int, version: str = "") -> ScannerOutput:
-    completed, duration = run_command(["checkov", "-d", workdir, "--quiet", "--compact", "-o", "json"])
+def scan(workdir: str, seed: int, version: str = "", exclude_dirs: list[str] | None = None) -> ScannerOutput:
+    command = ["checkov", "-d", workdir, "--quiet", "--compact", "-o", "json"]
+    for name in exclude_dirs or []:
+        command.extend(["--skip-path", name])
+    completed, duration = run_command(command)
     try:
         raw = load_json_output(completed.stdout)
     except Exception as exc:  # noqa: BLE001

@@ -31,6 +31,38 @@ Checkov and Trivy behind Streamable HTTP.
 - Health: `GET /health`
 - Report downloads: `GET /reports/{scan_id}/{filename}`
 
+## Hugging Face Logs
+
+The Hugging Face Space exposes build and runtime logs through authenticated API endpoints.
+Set `HF_TOKEN` in your shell; do not paste or commit the token value.
+
+```bash
+curl -N \
+    -H "Authorization: Bearer $HF_TOKEN" \
+    "https://huggingface.co/api/spaces/piyushptiwari/deep-sast-mcp/logs/run"
+
+curl -N \
+    -H "Authorization: Bearer $HF_TOKEN" \
+    "https://huggingface.co/api/spaces/piyushptiwari/deep-sast-mcp/logs/build"
+```
+
+Use `logs/run` for live application requests and scanner/report runtime errors. Use
+`logs/build` for Docker build, dependency install and Space startup failures.
+
+Expected runtime log noise:
+
+- `AuthlibDeprecationWarning` and `websockets...DeprecationWarning` come from FastMCP/Uvicorn
+    dependencies and do not indicate scanner failure.
+- `GET /favicon.ico` returning 404 is a browser probe and is harmless.
+- Streamable HTTP commonly logs `POST /mcp` 202, `GET /mcp` 200 and `DELETE /mcp` 200 during
+    MCP session setup, streaming and teardown.
+- Occasional `POST /mcp` or `GET /mcp` 400/404 entries usually mean a malformed probe, stale
+    MCP session id or request after the client already closed the session. Treat them as noise
+    when `tools/list`, scans and report downloads still return 200.
+- `Error in standalone SSE writer ... anyio.ClosedResourceError` is emitted by the MCP
+    stream writer when a client closes an SSE stream early. It is non-blocking if subsequent
+    MCP calls and report downloads continue to succeed.
+
 ## Files
 
 - `server.py` - thin entrypoint.
@@ -58,6 +90,29 @@ Checkov and Trivy behind Streamable HTTP.
 
 Normalized finding fields: `id, scanner, rule_id, title, severity, owasp, cwe, path,
 start_line, end_line, snippet, fix_hint, confidence, details`. gitleaks snippets are redacted.
+
+## Large Repository Handling
+
+Selection is deterministic and produces an honest coverage ledger instead of asserting
+100%. For every discovered file the server records one of: in-scope source, dependency
+lockfile (kept for SCA), or a categorized skip (`excluded_dir`, `binary`,
+`generated_minified`, `too_large`, `unsupported_language`, `gitignored_untracked`).
+
+- `.gitignore` is respected via `git ls-files`, so ignored content is excluded for free.
+- Default-excluded directories (seeded from Semgrep's `default.semgrepignore`) are pruned
+  during the walk, e.g. `node_modules`, `vendor`, `dist`, `build`, `__pycache__`, `.venv`,
+  `target`, `.terraform`. They never inflate the coverage denominator.
+- Binary files (null-byte heuristic + known binary extensions) are never scanned.
+- Files larger than `MAX_FILE_KB` are skipped for SAST and accounted as `too_large`.
+- The same exclude set is pushed into Semgrep (`--exclude`, `--max-target-bytes`), Trivy
+  (`--skip-dirs`) and Checkov (`--skip-path`) so scanners do less work and use less memory.
+- Each scanner's findings are capped at `MAX_FINDINGS_PER_SCANNER` to bound memory.
+
+The ledger (`coverage` block of `get_scan_status` / report) always satisfies
+`in_scope + sum(skipped) == total_discovered`.
+
+Tunable environment variables: `MAX_FILE_KB` (default 1024), `MAX_FINDINGS_PER_SCANNER`
+(default 5000), `RESPECT_GITIGNORE` (default true), `EXCLUDE_DIRS` (comma-separated override).
 
 ## Report Formats
 

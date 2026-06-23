@@ -50,6 +50,32 @@ class ScannerOutput:
 
 
 @dataclass
+class CoverageLedger:
+    """Honest reconciliation of every discovered file.
+
+    Invariant: ``in_scope + sum(skipped.values()) == total_discovered``.
+    """
+
+    total_discovered: int = 0
+    in_scope: int = 0
+    scanned: int = 0
+    skipped: dict[str, int] = field(default_factory=dict)
+    languages: dict[str, int] = field(default_factory=dict)
+    lockfiles: int = 0
+    used_git: bool = False
+
+    @property
+    def coverage_percent(self) -> float:
+        if self.in_scope == 0:
+            return 100.0 if self.scanned == 0 else 0.0
+        return round((self.scanned / self.in_scope) * 100, 2)
+
+    @property
+    def reconciles(self) -> bool:
+        return self.in_scope + sum(self.skipped.values()) == self.total_discovered
+
+
+@dataclass
 class ReportArtifact:
     report_id: str
     scan_id: str
@@ -74,6 +100,7 @@ class Scan:
     selected_scanners: list[str] = field(default_factory=list)
     total_files: int = 0
     files_scanned: int = 0
+    coverage: "CoverageLedger" = field(default_factory=lambda: CoverageLedger())
     findings: list[Finding] = field(default_factory=list)
     dependencies: list[dict[str, Any]] = field(default_factory=list)
     scanner_runs: list[ScannerRun] = field(default_factory=list)

@@ -7,7 +7,7 @@ from ..models import ScannerOutput
 from ..utils import load_json_output, run_command
 
 
-def scan(workdir: str, seed: int, version: str = "") -> ScannerOutput:  # noqa: ARG001
+def scan(workdir: str, seed: int, version: str = "", exclude_dirs: list[str] | None = None) -> ScannerOutput:  # noqa: ARG001
     completed, duration = run_command(["osv-scanner", "--format", "json", "-r", workdir])
     try:
         raw = load_json_output(completed.stdout) or {}

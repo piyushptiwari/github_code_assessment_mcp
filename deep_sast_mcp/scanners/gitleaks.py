@@ -11,7 +11,7 @@ from ..models import Finding, ScannerOutput
 from ..utils import run_command
 
 
-def scan(workdir: str, seed: int, version: str = "") -> ScannerOutput:
+def scan(workdir: str, seed: int, version: str = "", exclude_dirs: list[str] | None = None) -> ScannerOutput:  # noqa: ARG001
     report_path = os.path.join(workdir, "_gitleaks.json")
     completed, duration = run_command([
         "gitleaks",

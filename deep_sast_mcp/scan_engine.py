@@ -10,14 +10,15 @@ import time
 import uuid
 from typing import Any, Callable
 
-from .config import CLONE_DEPTH, DEFAULT_SCANNERS, MAX_REPO_MB, SCANNER_ALIASES
-from .models import Scan, ScannerOutput, ScannerRun, utc_now
+from .config import CLONE_DEPTH, DEFAULT_SCANNERS, MAX_FINDINGS_PER_SCANNER, MAX_REPO_MB, SCANNER_ALIASES
+from .models import CoverageLedger, Scan, ScannerOutput, ScannerRun, utc_now
 from .scanners import checkov, gitleaks, osv, semgrep, trivy
+from .selection import select_files
 from .storage import SCANS, ensure_report_dir
-from .utils import command_version, count_files, directory_size_mb, run_command, stderr_tail, validate_repo_url
+from .utils import command_version, directory_size_mb, run_command, stderr_tail, validate_repo_url
 
 
-ScannerAdapter = Callable[[str, int, str], ScannerOutput]
+ScannerAdapter = Callable[..., ScannerOutput]
 SCANNER_ADAPTERS: dict[str, ScannerAdapter] = {
     "semgrep": semgrep.scan,
     "gitleaks": gitleaks.scan,
@@ -92,7 +93,18 @@ def do_scan(scan: Scan, scanners: list[str]) -> None:
         if size_mb > MAX_REPO_MB:
             raise ValueError(f"repo too large: {size_mb:.0f}MB > {MAX_REPO_MB}MB cap")
 
-        scan.total_files = count_files(scan.workdir)
+        selection = select_files(scan.workdir)
+        scan.coverage = CoverageLedger(
+            total_discovered=selection.total_discovered,
+            in_scope=selection.in_scope,
+            scanned=selection.in_scope,
+            skipped=dict(selection.skipped),
+            languages=dict(selection.languages),
+            lockfiles=len(selection.lockfiles),
+            used_git=selection.used_git,
+        )
+        exclude_dirs = selection.exclude_dirs
+        scan.total_files = selection.in_scope
         scan.state = "scanning"
         scan.scanner_versions = collect_versions(scanners)
         scan.scanner_runs.append(
@@ -111,14 +123,17 @@ def do_scan(scan: Scan, scanners: list[str]) -> None:
             if adapter is None:
                 scan.scanner_runs.append(ScannerRun(scanner=scanner_name, status="skipped", error="unknown scanner"))
                 continue
-            output = adapter(scan.workdir, seed, scan.scanner_versions.get(scanner_name, ""))
-            scan.findings.extend(output.findings)
+            output = adapter(scan.workdir, seed, scan.scanner_versions.get(scanner_name, ""), exclude_dirs)
+            findings = output.findings[:MAX_FINDINGS_PER_SCANNER]
+            if output.run and len(output.findings) > MAX_FINDINGS_PER_SCANNER:
+                output.run.error = (output.run.error + f"; truncated to {MAX_FINDINGS_PER_SCANNER} findings").strip("; ")
+            scan.findings.extend(findings)
             scan.dependencies.extend(output.dependencies)
             if output.run:
                 scan.scanner_runs.append(output.run)
-            seed += max(len(output.findings), len(output.dependencies), 1) + 1000
+            seed += max(len(findings), len(output.dependencies), 1) + 1000
 
-        scan.files_scanned = scan.total_files
+        scan.files_scanned = scan.coverage.scanned
         scan.state = "done"
     except subprocess.TimeoutExpired:
         scan.state = "error"

@@ -7,8 +7,8 @@ from ..models import Finding, ScannerOutput
 from ..utils import SEVERITY_MAP, cwe_from, load_json_output, run_command
 
 
-def scan(workdir: str, seed: int, version: str = "") -> ScannerOutput:
-    completed, duration = run_command([
+def scan(workdir: str, seed: int, version: str = "", exclude_dirs: list[str] | None = None) -> ScannerOutput:
+    command = [
         "trivy",
         "fs",
         "--scanners",
@@ -16,8 +16,11 @@ def scan(workdir: str, seed: int, version: str = "") -> ScannerOutput:
         "--format",
         "json",
         "--quiet",
-        workdir,
-    ])
+    ]
+    for name in exclude_dirs or []:
+        command.extend(["--skip-dirs", f"**/{name}"])
+    command.append(workdir)
+    completed, duration = run_command(command)
     try:
         raw = load_json_output(completed.stdout) or {}
     except Exception as exc:  # noqa: BLE001

@@ -17,6 +17,25 @@ SCAN_TIMEOUT_S = int(os.getenv("SCAN_TIMEOUT_S", "1800"))
 COMMAND_VERSION_TIMEOUT_S = int(os.getenv("COMMAND_VERSION_TIMEOUT_S", "20"))
 SECRET_REDACT = "***REDACTED***"
 
+# --- File selection and memory bounds (large/noisy repositories) ---
+# Per-file size cap for SAST. Semgrep's own default is 1 MB.
+MAX_FILE_KB = int(os.getenv("MAX_FILE_KB", "1024"))
+# Respect .gitignore via `git ls-files` so ignored content is excluded for free.
+RESPECT_GITIGNORE = os.getenv("RESPECT_GITIGNORE", "true").strip().lower() not in {"0", "false", "no"}
+# Cap findings retained per scanner so a pathological repo cannot exhaust memory.
+MAX_FINDINGS_PER_SCANNER = int(os.getenv("MAX_FINDINGS_PER_SCANNER", "5000"))
+
+# Default-exclude directories, seeded from Semgrep's default.semgrepignore plus
+# common build/cache/vendor output. These are skipped even when committed.
+_DEFAULT_EXCLUDE_DIRS = (
+    "node_modules,bower_components,vendor,dist,build,out,target,.gradle,"
+    ".venv,venv,env,.tox,.nox,__pycache__,.mypy_cache,.pytest_cache,.ruff_cache,"
+    ".next,.nuxt,.svelte-kit,.angular,.cache,.parcel-cache,coverage,htmlcov,"
+    ".terraform,.serverless,.idea,.vscode,.eggs,site-packages,jspm_packages,"
+    ".yarn,.pnpm-store,.gradle-cache,deps,_build,.dart_tool"
+)
+EXCLUDE_DIRS = _csv_set(os.getenv("EXCLUDE_DIRS", _DEFAULT_EXCLUDE_DIRS))
+
 MCP_AUTH_TOKEN = os.getenv("MCP_AUTH_TOKEN", "").strip()
 PUBLIC_REPORTS = os.getenv("PUBLIC_REPORTS", "true").strip().lower() not in {"0", "false", "no"}
 REPORTS_ROOT = os.getenv("REPORTS_ROOT", os.path.join(tempfile.gettempdir(), "deep-sast-reports"))

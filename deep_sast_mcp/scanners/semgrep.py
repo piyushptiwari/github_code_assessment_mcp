@@ -3,22 +3,28 @@
 from __future__ import annotations
 
 from .shared import ok_run, parse_error_run
+from ..config import MAX_FILE_KB
 from ..models import Finding, ScannerOutput
 from ..utils import SEVERITY_MAP, cwe_from, load_json_output, owasp_from, repo_relative, run_command
 
 
-def scan(workdir: str, seed: int, version: str = "") -> ScannerOutput:
-    completed, duration = run_command([
+def scan(workdir: str, seed: int, version: str = "", exclude_dirs: list[str] | None = None) -> ScannerOutput:
+    command = [
         "semgrep",
         "scan",
         "--config",
         "p/owasp-top-ten",
         "--config",
         "p/security-audit",
+        "--max-target-bytes",
+        str(MAX_FILE_KB * 1024),
         "--json",
         "--quiet",
-        workdir,
-    ])
+    ]
+    for name in exclude_dirs or []:
+        command.extend(["--exclude", name])
+    command.append(workdir)
+    completed, duration = run_command(command)
     try:
         raw = load_json_output(completed.stdout) or {}
     except Exception as exc:  # noqa: BLE001

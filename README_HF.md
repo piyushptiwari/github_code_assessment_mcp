@@ -24,3 +24,13 @@ Tools include scan, status, paginated findings, finding context, file access,
 dependency reports, `generate_report`, `get_report`, `list_reports`, and cleanup.
 
 Detailed reports are available as Markdown, HTML, JSON, SARIF, or ZIP evidence packs.
+
+Hugging Face log APIs:
+
+```bash
+curl -N -H "Authorization: Bearer $HF_TOKEN" \
+	"https://huggingface.co/api/spaces/piyushptiwari/deep-sast-mcp/logs/run"
+
+curl -N -H "Authorization: Bearer $HF_TOKEN" \
+	"https://huggingface.co/api/spaces/piyushptiwari/deep-sast-mcp/logs/build"
+```
